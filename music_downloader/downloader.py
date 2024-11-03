@@ -15,14 +15,19 @@ def sanitize_filename(filename):
     """Sanitize filename to avoid issues with special characters."""
     return re.sub(r'[\\/:"*?<>|]+', "_", filename)
 
+def is_youtube_url(input_string):
+    """Check if the input string is a YouTube URL."""
+    return "youtube.com" in input_string or "youtu.be" in input_string
+
 def search_youtube(song_title):
-    """Search for the song on YouTube and return the first video URL."""
-    ydl_opts = {'format': 'bestaudio/best'}
+    """Search for the song on YouTube and return the first video URL and metadata."""
+    ydl_opts = {'format': 'bestaudio/best', 'noplaylist': True}
     search_url = f"ytsearch:{song_title}"
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         result = ydl.extract_info(search_url, download=False)
         video_url = result['entries'][0]['webpage_url']
-        return video_url
+        music_metadata = result['entries'][0]
+        return video_url, music_metadata
 
 def fetch_genius_metadata(song_title, artist=None):
     """Fetch song metadata, including lyrics and album art, from Genius."""
@@ -34,19 +39,14 @@ def fetch_genius_metadata(song_title, artist=None):
         data = response.json()
         if data['response']['hits']:
             song_data = data['response']['hits'][0]['result']
-            title_with_featured = song_data.get("title_with_featured")
-            title = song_data.get("title")
-            full_title = song_data.get("full_title")
-            
-            official_title = title_with_featured or title or full_title
+            title_with_featured = song_data.get('title_with_featured') or song_data.get('title')
             song_url = song_data['url']
             song_art_url = song_data['song_art_image_url']
             primary_artist = song_data['primary_artist']['name']
             release_date = song_data.get('release_date_for_display')
             lyrics = scrape_lyrics_from_url(song_url)
-            
             return {
-                "title": official_title,
+                "title": title_with_featured,
                 "artist": primary_artist,
                 "album": "Single",
                 "release_date": release_date,
@@ -57,19 +57,14 @@ def fetch_genius_metadata(song_title, artist=None):
     return None
 
 def scrape_lyrics_from_url(url):
-    """Scrape lyrics directly from the Genius song page using the data-lyrics-container attribute."""
+    """Scrape lyrics directly from the Genius song page."""
     response = requests.get(url)
     if response.status_code == 200:
         soup = BeautifulSoup(response.text, 'html.parser')
-        lyrics_divs = soup.find_all('div', {'data-lyrics-container': 'true'})
-        
-        # Collect all text within these divs, handling line breaks
-        lyrics = "\n".join(div.get_text(separator='\n') for div in lyrics_divs)
-        if(lyrics):
-            print(lyrics)
-        return lyrics if lyrics else None
+        lyrics_container = soup.find_all("div", attrs={"data-lyrics-container": "true"})
+        if lyrics_container:
+            return "\n".join([container.get_text(separator="\n") for container in lyrics_container])
     return None
-
 
 def embed_metadata(file_path, metadata):
     """Embed metadata including title, artist, album, artwork, and lyrics into the MP3 file."""
@@ -77,7 +72,6 @@ def embed_metadata(file_path, metadata):
         print("No metadata to embed.")
         return
     
-    # Embed title, artist, and album info
     audio = EasyID3(file_path)
     audio['title'] = metadata.get('title', 'Unknown Title')
     audio['artist'] = metadata.get('artist', 'Unknown Artist')
@@ -87,7 +81,7 @@ def embed_metadata(file_path, metadata):
     # Embed lyrics if available
     if metadata.get('lyrics'):
         audio = ID3(file_path)
-        audio["USLT::'eng'"] = USLT(encoding=3, lang='eng', desc='', text=metadata['lyrics'])
+        audio["USLT"] = USLT(encoding=3, lang='eng', desc='Lyrics', text=metadata['lyrics'])
         audio.save()
         print("Lyrics embedded in the MP3 file.")
     
@@ -97,7 +91,7 @@ def embed_metadata(file_path, metadata):
             art_response = requests.get(metadata['song_art_url'])
             art_response.raise_for_status()
             audio = ID3(file_path)
-            audio["APIC::'Cover'"] = APIC(
+            audio["APIC"] = APIC(
                 encoding=3,
                 mime='image/jpeg',
                 type=3,
@@ -111,14 +105,12 @@ def embed_metadata(file_path, metadata):
     else:
         print("No artwork found to embed.")
 
-
 def download_audio(video_url, output_dir, metadata):
     """Download audio from YouTube, convert it to MP3, and embed metadata."""
-    official_title = sanitize_filename(metadata['title'])
     with tempfile.TemporaryDirectory() as temp_dir:
         ydl_opts = {
             'format': 'bestaudio/best',
-            'outtmpl': os.path.join(temp_dir, official_title + '.%(ext)s'),
+            'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
             'postprocessors': [
                 {
                     'key': 'FFmpegExtractAudio',
@@ -129,34 +121,76 @@ def download_audio(video_url, output_dir, metadata):
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.extract_info(video_url, download=True)
-            downloaded_file = os.path.join(temp_dir, f"{official_title}.mp3")
-            final_file = os.path.join(output_dir, f"{official_title}.mp3")
-            
+            info = ydl.extract_info(video_url, download=True)
+            final_file_name = sanitize_filename(metadata['title'] if metadata else info['title'])
+            final_file = os.path.join(output_dir, f"{final_file_name}.mp3")
+            downloaded_file = os.path.join(temp_dir, f"{info['title']}.mp3")
             embed_metadata(downloaded_file, metadata)
             shutil.move(downloaded_file, final_file)
-            print(f"Downloaded and saved '{official_title}' to {output_dir}")
+            print(f"Downloaded and saved '{final_file_name}' to {output_dir}")
 
-def main(song_name, output_dir):
-    """Main function to search, download, and process song metadata."""
-    output_dir = os.path.expanduser(output_dir)
-    os.makedirs(output_dir, exist_ok=True)
-
-    # Fetch Genius metadata
-    metadata = fetch_genius_metadata(song_name)
-    
-    if metadata:
-        # Search YouTube using the official title from Genius metadata
-        video_url = search_youtube(metadata['title'])
-        download_audio(video_url, output_dir, metadata)
-        print("All downloads and metadata processing completed.")
-    else:
-        print("Song metadata not found on Genius; download aborted.")
-
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(description="Download music and fetch metadata from Genius.")
-    parser.add_argument("song_name", help="The name of the song to search and download")
-    parser.add_argument("--output_dir", help="Directory to save the downloaded audio", default="~/Music/Music/Media.localized/Automatically Add to Music.localized")
+    
+    DEFAULT_OUTPUT_DIR = os.path.join(
+        os.path.expanduser("~"), "Music") if os.name == "nt" else "~/Music/Music/Media.localized/Automatically Add to Music.localized"
+    
+    parser.add_argument("input", help="YouTube URL, playlist URL, or song name to search and download")
+    parser.add_argument("--output_dir", help="Directory to save the downloaded audio", default=DEFAULT_OUTPUT_DIR)
     
     args = parser.parse_args()
-    main(args.song_name, args.output_dir)
+
+    output_dir = os.path.expanduser(args.output_dir)
+    os.makedirs(output_dir, exist_ok=True)
+
+    if is_youtube_url(args.input):
+        print("Input recognized as a YouTube URL.")
+        video_url = args.input
+        ydl_opts = {'quiet': True, 'extract_flat': True, 'format': 'bestaudio/best'}
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=False)
+            
+            if 'entries' in info:
+                print(f"Processing playlist: {info['title']}")
+                for entry in info['entries']:
+                    video_url = f"https://www.youtube.com/watch?v={entry['id']}"
+                    music_metadata = ydl.extract_info(video_url, download=False)
+                    metadata = {
+                        "title": music_metadata['title'],
+                        "artist": music_metadata.get('artist', 'Unknown Artist'),
+                        "album": "Single"
+                    }
+                    print(metadata)
+                    download_audio(video_url, output_dir, metadata)
+            else:
+                print(f"Processing video: {info['title']}")
+                music_metadata = ydl.extract_info(video_url, download=False)
+                metadata = {
+                    "title": music_metadata['title'],
+                    "artist": music_metadata.get('artist', 'Unknown Artist'),
+                    "album": "Single"
+                }
+                print(metadata)
+                download_audio(video_url, output_dir, metadata)
+    else:
+        print("Input recognized as a song name.")
+        # Attempt to fetch Genius metadata
+        metadata = fetch_genius_metadata(args.input)
+        
+        # If Genius metadata is found, use it; otherwise, fall back to YouTube metadata
+        if metadata:
+            video_url, _ = search_youtube(args.input)
+            print("Genius metadata found.")
+        else:
+            print("Song not found on Genius, falling back to YouTube metadata.")
+            video_url, youtube_metadata = search_youtube(args.input)
+            metadata = {
+                "title": youtube_metadata['title'],
+                "artist": youtube_metadata.get('artist', 'Unknown Artist'),
+                "album": "Single"
+            }
+
+        # Download audio using the available metadata (Genius or YouTube)
+        download_audio(video_url, output_dir, metadata)
+        print("All downloads and metadata processing completed.")
