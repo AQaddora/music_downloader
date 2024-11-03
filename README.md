@@ -96,7 +96,7 @@ pip install -r requirements.txt
 To run the downloader locally:
 
 ```bash
-python -m music_downloader/downloader.py "Song Title"
+python -m music_downloader.downloader "Song Title"
 ```
 
 ## Contribution

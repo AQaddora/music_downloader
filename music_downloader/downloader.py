@@ -106,11 +106,13 @@ def embed_metadata(file_path, metadata):
         print("No artwork found to embed.")
 
 def download_audio(video_url, output_dir, metadata):
-    """Download audio from YouTube, convert it to MP3, and embed metadata."""
+    """Download audio from YouTube, convert it to MP3, embed metadata, then move file."""
     with tempfile.TemporaryDirectory() as temp_dir:
+        # Use sanitized title for both temp and final filenames
+        title = sanitize_filename(metadata['title']) if metadata else "audio"
         ydl_opts = {
             'format': 'bestaudio/best',
-            'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
+            'outtmpl': os.path.join(temp_dir, f"{title}.%(ext)s"),
             'postprocessors': [
                 {
                     'key': 'FFmpegExtractAudio',
@@ -122,12 +124,20 @@ def download_audio(video_url, output_dir, metadata):
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=True)
-            final_file_name = sanitize_filename(metadata['title'] if metadata else info['title'])
-            final_file = os.path.join(output_dir, f"{final_file_name}.mp3")
-            downloaded_file = os.path.join(temp_dir, f"{info['title']}.mp3")
+            downloaded_file = os.path.join(temp_dir, f"{title}.mp3")
+            
+            # Check if the downloaded file exists before embedding metadata
+            if not os.path.exists(downloaded_file):
+                print(f"Error: Downloaded file {downloaded_file} not found. Conversion may have failed.")
+                return  # Exit the function if the file is missing
+            
+            # Embed metadata before moving to the output directory
             embed_metadata(downloaded_file, metadata)
+
+            # Move to the output directory as the final step
+            final_file = os.path.join(output_dir, f"{title}.mp3")
             shutil.move(downloaded_file, final_file)
-            print(f"Downloaded and saved '{final_file_name}' to {output_dir}")
+            print(f"Downloaded and saved '{title}' to {output_dir}")
 
 def main():
     parser = argparse.ArgumentParser(description="Download music and fetch metadata from Genius.")
@@ -194,3 +204,6 @@ def main():
         # Download audio using the available metadata (Genius or YouTube)
         download_audio(video_url, output_dir, metadata)
         print("All downloads and metadata processing completed.")
+
+if __name__ == "__main__":
+    main()
