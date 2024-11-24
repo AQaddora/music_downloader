@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="qa_download",
-    version="1.0.3",
+    version="1.0.5",
     author="Ahmed Qaddoura",
     author_email="aqaddora96@gmail.com",
     description="A tool for downloading music with embedded metadata and lyrics.",

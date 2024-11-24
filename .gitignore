@@ -3,3 +3,4 @@ build
 .env
 __pycache__
 qa_download.egg-info/
+.DS_Store
